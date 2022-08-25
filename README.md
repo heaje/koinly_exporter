@@ -25,7 +25,7 @@ For ease of use, it is suggested to use a Python virtual environment to install 
 Creating an environment and installing the dependencies can be done like this:
 ```
 virtualenv /path/to/virtualenv
-/path/to/virtualenv/bin/pip install -r requirementments.txt
+/path/to/virtualenv/bin/pip install -r requirements.txt
 ```
 
 After doing the above, the scripts can be run:
