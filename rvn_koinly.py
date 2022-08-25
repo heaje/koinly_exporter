@@ -5,8 +5,47 @@ import csv
 import datetime
 import json
 import logging
-import requests
+import os
 from decimal import Decimal
+from typing import Optional
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.response import HTTPResponse
+from urllib3.util.retry import Retry
+
+
+class LogRetry(Retry):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def sleep(self, response: Optional["HTTPResponse"] = None) -> None:
+        retry_after = self.get_retry_after(response)
+        if not retry_after:
+            retry_after = self.get_backoff_time()
+
+        logging.info(
+            'HTTP %s response when making request.  Will retry after backoff (%s seconds).',
+            response.status, retry_after
+        )
+        super().sleep(response)
+
+
+class TimeoutHTTPAdapter(HTTPAdapter):
+    DEFAULT_TIMEOUT = 5
+
+    def __init__(self, *args, **kwargs):
+        self.timeout = self.DEFAULT_TIMEOUT
+        if "timeout" in kwargs:
+            self.timeout = kwargs["timeout"]
+            del kwargs["timeout"]
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        timeout = kwargs.get("timeout")
+        if timeout is None:
+            kwargs["timeout"] = self.timeout
+        return super().send(request, **kwargs)
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -19,36 +58,53 @@ class DecimalEncoder(json.JSONEncoder):
         return super(DecimalEncoder, self).default(o)
 
 
-RVN_BC_EXPLORER = 'https://api.ravencoin.org/api'
-
 parser = argparse.ArgumentParser(
-    description="Convert Atomic Wallet CSV export to Koinly"
+    description="Build Koinly compatible CSV file from RVN blockchain data"
 )
-parser.add_argument(
-    "-w", "--wallet", dest="wallet", help="RVN public wallet address", required=True
-)
-parser.add_argument(
-    "-o", "--output", dest="output", help="Koinly output CSV file", required=True
-)
-parser.add_argument(
-    "-l", "--log-level", dest="log_level", help="Logging level", default="info"
-)
+parser.add_argument("-w", "--wallet", dest="wallet",
+                    help="RVN public wallet address", required=True)
+parser.add_argument("-o", "--output", dest="output",
+                    help="Koinly output CSV file", required=True)
+parser.add_argument("-l", "--log-level", dest="log_level",
+                    help="Logging level", default="info")
+parser.add_argument("--http-request-timeout", dest="request_timeout",
+                    help="Timeout in seconds for retrieving transaction information", default=5)
+parser.add_argument("--http-failure-retry", dest="failure_retry",
+                    help="The number of times to retry requests when retrieving transaction information", default=5)
+parser.add_argument("--http-backoff-factor", dest="backoff_factor",
+                    help="The backoff factor when doing exponential backoff for HTTP requests.", default=10)
 opts = parser.parse_args()
 log_level = getattr(logging, opts.log_level.upper())
-logging.basicConfig(format='%(levelname)s: %(message)s', level=log_level)
+logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
+
+RVN_BC_EXPLORER = 'https://api.ravencoin.org/api'
+retry_strategy = LogRetry(
+    total=opts.failure_retry,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS"],
+    backoff_factor=opts.backoff_factor,
+)
+http = requests.Session()
+http.mount("https://", TimeoutHTTPAdapter(max_retries=retry_strategy,
+           timeout=opts.request_timeout))
+http.mount("http://", TimeoutHTTPAdapter(max_retries=retry_strategy,
+           timeout=opts.request_timeout))
 
 new_csv_data = []
 logging.info('Pulling data from %s/txs?address=%s', RVN_BC_EXPLORER, opts.wallet)
-txs = requests.get('{}/txs'.format(RVN_BC_EXPLORER), params={'address': opts.wallet, 'pageNum': 0}).json()
+txs = http.get('{}/txs'.format(RVN_BC_EXPLORER),
+               params={'address': opts.wallet, 'pageNum': 0}).json()
 logging.debug('Will parse %s page(s) of transactions', txs['pagesTotal'])
 
 for page in range(0, txs['pagesTotal']):
     if page > 0:
-        logging.debug('Requesting transactions page %s', page + 1)
-        txs = requests.get('{}/txs'.format(RVN_BC_EXPLORER), params={'address': opts.wallet, 'pageNum': page}).json()
+        logging.info('Requesting transactions page %s of %s',
+                     page + 1, txs['pagesTotal'])
+        txs = http.get('{}/txs'.format(RVN_BC_EXPLORER),
+                       params={'address': opts.wallet, 'pageNum': page}).json()
 
     for cur_tx in txs['txs']:
-        logging.debug('Found transaction %s: %s', cur_tx['txid'], json.dumps(cur_tx))
+        logging.debug('Found transaction: %s', cur_tx['txid'])
         koinly_sent = Decimal(0)
         koinly_received = Decimal(0)
         fee = Decimal(0)
