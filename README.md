@@ -39,6 +39,11 @@ To see all available options, pass the ```--help``` parameter to the desired scr
 ### Requirements for rtm_koinly.py
 The use of the ```rtm_koinly.py``` requires that ```raptoreumd``` (from the [Raptoreum Wallet](https://raptoreum.com/)) be running.  ```raptoreum-cli``` is then used to find all transactions on a given wallet.
 
+The ```raptoreum.conf``` configuration file MUST include the following:
+```
+addressindex=1
+```
+
 Please wait for ```raptoreumd``` (or the Raptoreum GUI in Windows) to get a complete set of transactions for a given wallet.
 
 ## Donations
