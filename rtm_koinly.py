@@ -105,6 +105,7 @@ try:
     cmd = shlex.split("{} getaddressdeltas '{}'".format(
         opts.rtm_cli_path, json.dumps(address_deltas_param))
     )
+    logging.debug('Running command: %s', cmd)
     result = subprocess.run(cmd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE)
     if result.returncode != 0:
@@ -118,7 +119,13 @@ except FileNotFoundError as e:
     sys.exit(1)
 
 data_by_tx = {}
-for data in json.loads(result.stdout):
+try:
+    json_result = json.loads(result.stdout)
+except json.decoder.JSONDecodeError:
+    tmp_result = result.stdout.decode("utf-8").split('main\n', 1)[1]
+    json_result = json.loads(tmp_result)
+
+for data in json_result:
     txid = data["txid"]
 
     cur_tx = CACHE.get(txid)
